@@ -1,5 +1,8 @@
 version: '3.8'
 
+# Для Docker Compose v2 используйте: docker compose up -d
+# Для старой версии docker-compose: docker-compose up -d
+
 services:
   vpn-bot:
     build: .
