@@ -1,0 +1,23 @@
+version: '3.8'
+
+# Альтернативная конфигурация с использованием host network
+# Используйте если host.docker.internal не работает
+# Запуск: docker-compose -f docker-compose.host-network.yml up -d
+
+services:
+  vpn-bot:
+    build: .
+    container_name: vpn-tg-bot
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      # База данных
+      - ./data:/app/data
+      # Логи
+      - ./logs:/app/logs
+      # Статические файлы
+      - ./static:/app/static
+      # Конфигурация
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONUNBUFFERED=1

@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  vpn-bot:
+    build: .
+    container_name: vpn-tg-bot
+    restart: unless-stopped
+    volumes:
+      # База данных
+      - ./data:/app/data
+      # Логи
+      - ./logs:/app/logs
+      # Статические файлы
+      - ./static:/app/static
+      # Конфигурация (опционально, если хотите монтировать .env)
+      - ./.env:/app/.env:ro
+    environment:
+      # Переменные окружения можно задать здесь или в .env файле
+      - PYTHONUNBUFFERED=1
+    networks:
+      - vpn-network
+    # Подключение к 3x-ui на том же хосте (не в Docker)
+    # host.docker.internal работает на Linux с Docker 20.10+
+    # Для старых версий используйте network_mode: "host" или IP хоста
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Альтернатива для старых версий Docker (раскомментируйте если нужно):
+    # network_mode: "host"
+
+networks:
+  vpn-network:
+    driver: bridge
