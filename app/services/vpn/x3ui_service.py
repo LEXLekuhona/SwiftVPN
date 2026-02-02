@@ -42,7 +42,12 @@ class X3UIService:
             # Создаем cookie jar для сохранения cookies
             cookie_jar = aiohttp.CookieJar()
             
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout, cookie_jar=cookie_jar) as session:
+            async with aiohttp.ClientSession(
+                connector=connector, 
+                timeout=timeout, 
+                cookie_jar=cookie_jar,
+                allow_redirects=True  # Разрешаем редиректы
+            ) as session:
                 # Заголовки для авторизации (минимальные)
                 login_headers = {
                     "Content-Type": "application/json",
