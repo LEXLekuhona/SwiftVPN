@@ -104,7 +104,15 @@ async def callback_how_to_connect(callback: CallbackQuery):
             url="https://play.google.com/store/apps/details?id=com.v2raytun.app",
         )
         
-        if settings.SUPPORT_USERNAME:
+        # Кнопка поддержки ведет на профиль администратора
+        if settings.ADMIN_IDS:
+            admin_id = settings.ADMIN_IDS[0]  # Берем первого администратора
+            kb.button(
+                text="🛠 Поддержка",
+                url=f"tg://user?id={admin_id}",
+            )
+        elif settings.SUPPORT_USERNAME:
+            # Fallback на username, если ADMIN_IDS не указан
             kb.button(
                 text="🛠 Поддержка",
                 url=f"https://t.me/{settings.SUPPORT_USERNAME}",
