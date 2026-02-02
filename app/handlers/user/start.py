@@ -119,54 +119,34 @@ async def callback_how_to_connect(callback: CallbackQuery):
             )
         kb.adjust(2)
 
-        # Проверяем, есть ли фото в сообщении и есть ли caption
-        if callback.message.photo:
-            # Если сообщение содержит фото, проверяем наличие caption
-            if callback.message.caption:
-                # Если есть caption, используем edit_caption
-                try:
-                    await callback.message.edit_caption(
-                        caption=instruction_text,
-                        parse_mode="Markdown",
-                        reply_markup=kb.as_markup()
-                    )
-                except Exception as e:
-                    logger.warning(f"Не удалось edit_caption: {e}, отправляем новое сообщение")
-                    # Если edit_caption не работает, отправляем новое сообщение
-                    try:
-                        await callback.message.delete()
-                    except:
-                        pass
-                    await callback.message.answer(
-                        instruction_text,
-                        parse_mode="Markdown",
-                        reply_markup=kb.as_markup()
-                    )
-            else:
-                # Если фото есть, но нет caption, отправляем новое сообщение
-                try:
-                    await callback.message.delete()
-                except:
-                    pass
-                await callback.message.answer(
-                    instruction_text,
-                    parse_mode="Markdown",
-                    reply_markup=kb.as_markup()
-                )
-        else:
-            # Если фото нет, используем обычный edit_text
+        # Упрощенная логика: всегда отправляем новое сообщение
+        # Это более надежно, чем пытаться редактировать сообщения с фото
+        try:
+            # Пытаемся удалить старое сообщение (не критично, если не получится)
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            
+            # Отправляем новое сообщение с инструкцией
+            await callback.message.answer(
+                instruction_text,
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки инструкции: {e}")
+            # Если не удалось отправить, пробуем через edit_text (для текстовых сообщений)
             try:
                 await callback.message.edit_text(
                     instruction_text,
                     parse_mode="Markdown",
                     reply_markup=kb.as_markup()
                 )
-            except Exception as e:
-                logger.warning(f"Не удалось edit_text: {e}, отправляем новое сообщение")
-                # Если edit_text не работает, отправляем новое сообщение
+            except Exception as e2:
+                logger.error(f"Не удалось отправить инструкцию: {e2}")
                 await callback.message.answer(
-                    instruction_text,
-                    parse_mode="Markdown",
+                    "❌ Не удалось отправить инструкцию. Попробуйте позже.",
                     reply_markup=kb.as_markup()
                 )
         
