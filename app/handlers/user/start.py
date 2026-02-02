@@ -111,14 +111,36 @@ async def callback_how_to_connect(callback: CallbackQuery):
             )
         kb.adjust(2)
 
-        await callback.message.edit_text(
-            instruction_text,
-            parse_mode="Markdown",
-            reply_markup=kb.as_markup()
-        )
+        # Проверяем, есть ли фото в сообщении
+        if callback.message.photo:
+            # Если сообщение содержит фото, используем edit_caption или отправляем новое
+            try:
+                await callback.message.edit_caption(
+                    caption=instruction_text,
+                    parse_mode="Markdown",
+                    reply_markup=kb.as_markup()
+                )
+            except Exception:
+                # Если edit_caption не работает, отправляем новое сообщение
+                await callback.message.delete()
+                await callback.message.answer(
+                    instruction_text,
+                    parse_mode="Markdown",
+                    reply_markup=kb.as_markup()
+                )
+        else:
+            # Если фото нет, используем обычный edit_text
+            await callback.message.edit_text(
+                instruction_text,
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+        
         await callback.answer()
 
     except Exception as e:
         logger.error(f"Ошибка в callback_how_to_connect: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         await callback.answer("Произошла ошибка", show_alert=True)
 
