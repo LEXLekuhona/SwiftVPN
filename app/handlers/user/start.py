@@ -81,7 +81,7 @@ async def callback_how_to_connect(callback: CallbackQuery):
 
 1️⃣ *Установите приложение:*
 • Android: V2RayTun из Play Market
-• iOS: Shadowrocket из App Store
+• iOS: V2RayTun из App Store
 
 2️⃣ *Подключитесь:*
 • Откройте V2RayTun
@@ -151,4 +151,61 @@ async def callback_how_to_connect(callback: CallbackQuery):
         import traceback
         logger.error(traceback.format_exc())
         await callback.answer("Произошла ошибка", show_alert=True)
+
+
+@router.message(F.text, F.text.regexp(r"^/help").as_("cmd"))
+async def cmd_help(message: Message):
+    """Обработчик команды /help"""
+    try:
+        help_text = """
+📖 *Помощь по использованию бота*
+
+🔹 *Основные команды:*
+/start - Запустить бота
+/buy - Купить VPN доступ
+/mykey - Получить ключ доступа
+/profile - Мой профиль
+/help - Показать эту справку
+
+🔹 *Как это работает:*
+1️⃣ Выберите тариф и оплатите через Telegram Stars
+2️⃣ Получите ключ доступа автоматически
+3️⃣ Скопируйте ключ и импортируйте в V2RayTun
+4️⃣ Наслаждайтесь быстрым и безопасным интернетом!
+
+🔹 *Приложения для подключения:*
+• Android: V2RayTun из Play Market
+• iOS: V2RayTun из App Store
+
+🔹 *Нужна помощь?*
+Нажмите кнопку "❓ Как подключиться?" для подробной инструкции.
+        """
+
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💰 Купить VPN", callback_data="show_tariffs")
+        kb.button(text="❓ Как подключиться?", callback_data="how_to_connect")
+        
+        # Кнопка поддержки ведет на профиль администратора
+        if settings.ADMIN_IDS:
+            admin_id = settings.ADMIN_IDS[0]
+            kb.button(
+                text="🛠 Поддержка",
+                url=f"tg://user?id={admin_id}",
+            )
+        elif settings.SUPPORT_USERNAME:
+            kb.button(
+                text="🛠 Поддержка",
+                url=f"https://t.me/{settings.SUPPORT_USERNAME}",
+            )
+        kb.adjust(2, 1)
+
+        await message.answer(
+            help_text,
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка в /help: {e}")
+        await message.answer("Произошла ошибка. Пожалуйста, попробуйте позже.")
 
