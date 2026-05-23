@@ -70,9 +70,10 @@ class Payment(Base):
     
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    invoice_id = Column(Integer, unique=True)
+    invoice_id = Column(Integer, unique=True, nullable=True)
+    yookassa_payment_id = Column(String(36), unique=True, nullable=True, index=True)
     amount = Column(Float, nullable=False)
-    currency = Column(String(10), default="USDT")
+    currency = Column(String(10), default="RUB")
     status = Column(String(20), default="pending")
     payment_method = Column(String(20))
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -16,6 +16,8 @@ services:
       - ./static:/app/static
       # Конфигурация (опционально, если хотите монтировать .env)
       - ./.env:/app/.env:ro
+    ports:
+      - "${YOOKASSA_WEBHOOK_PORT:-8080}:8080"
     environment:
       # Переменные окружения можно задать здесь или в .env файле
       - PYTHONUNBUFFERED=1

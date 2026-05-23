@@ -30,6 +30,7 @@ async def main():
     logger.info("🚀 Запуск VPN Telegram Bot...")
     logger.info(f"📊 Python версия: {sys.version}")
 
+    webhook_runner = None
     try:
         # Создаем необходимые директории
         create_dirs()
@@ -37,6 +38,13 @@ async def main():
         # Инициализируем базу данных
         logger.info("🔧 Инициализация базы данных...")
         await db.init_db()
+
+        try:
+            from app.services.payment.webhook_server import start_webhook_server
+
+            webhook_runner = await start_webhook_server()
+        except Exception as e:
+            logger.warning(f"Не удалось запустить webhook ЮKassa: {e}")
 
         # Регистрируем обработчики
         logger.info("📝 Регистрация обработчиков...")
@@ -153,6 +161,13 @@ async def main():
         raise
     finally:
         logger.info("Завершение работы...")
+        try:
+            from app.services.payment.webhook_server import stop_webhook_server
+
+            if webhook_runner:
+                await stop_webhook_server(webhook_runner)
+        except Exception:
+            pass
         await db.close()
 
 

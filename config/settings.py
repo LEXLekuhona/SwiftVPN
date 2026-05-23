@@ -23,6 +23,16 @@ class Settings:
     # Payment
     DEFAULT_CURRENCY: str = os.getenv("DEFAULT_CURRENCY", "USDT")
     DEFAULT_NETWORK: str = os.getenv("DEFAULT_NETWORK", "TRC20")
+
+    # ЮKassa (СБП)
+    YOOKASSA_SHOP_ID: str = os.getenv("YOOKASSA_SHOP_ID", "").strip()
+    YOOKASSA_SECRET_KEY: str = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
+    YOOKASSA_RETURN_URL: str = os.getenv("YOOKASSA_RETURN_URL", "")
+    YOOKASSA_WEBHOOK_ENABLED: bool = os.getenv("YOOKASSA_WEBHOOK_ENABLED", "true").lower() == "true"
+    YOOKASSA_WEBHOOK_HOST: str = os.getenv("YOOKASSA_WEBHOOK_HOST", "0.0.0.0")
+    YOOKASSA_WEBHOOK_PORT: int = int(os.getenv("YOOKASSA_WEBHOOK_PORT", "8080"))
+    YOOKASSA_WEBHOOK_PATH: str = os.getenv("YOOKASSA_WEBHOOK_PATH", "/yookassa/webhook")
+    YOOKASSA_WEBHOOK_VERIFY_IP: bool = os.getenv("YOOKASSA_WEBHOOK_VERIFY_IP", "true").lower() == "true"
     
     # Bot Settings
     BOT_USERNAME: str = os.getenv("BOT_USERNAME", "")

@@ -89,6 +89,9 @@ async def send_v2ray_key_to_user(user_id: int):
 
             server_config = settings.VPN_SERVERS[0]
             key_data = await v2ray_service.create_key(user_id, server_config)
+        else:
+            await v2ray_service.sync_subscription_to_x3ui(user_id)
+            key_data = await v2ray_service.get_active_key(user_id) or key_data
 
         # Отправляем ключ
         await send_key_to_user(user_id, key_data)

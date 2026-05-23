@@ -397,7 +397,106 @@ class X3UIService:
             logger.error(traceback.format_exc())
             return None
     
-    async def add_client(self, uuid: str, email: str = None, inbound_id: int = None) -> tuple[bool, Optional[Dict]]:
+    @staticmethod
+    def _parse_inbound_settings(inbound: Dict) -> dict:
+        inbound_settings = inbound.get("settings", {})
+        if isinstance(inbound_settings, str):
+            inbound_settings = json.loads(inbound_settings)
+        elif not isinstance(inbound_settings, dict):
+            inbound_settings = {}
+        return inbound_settings
+
+    async def _save_inbound_clients(
+        self, inbound: Dict, inbound_settings: dict, inbound_id: int
+    ) -> bool:
+        """Сохраняет обновлённый список clients в inbound через API."""
+        settings_str = json.dumps(inbound_settings)
+
+        stream_settings = inbound.get("streamSettings", {})
+        if isinstance(stream_settings, str):
+            stream_settings_str = stream_settings
+        else:
+            stream_settings_str = json.dumps(stream_settings) if stream_settings else "{}"
+
+        sniffing = inbound.get("sniffing", {})
+        if isinstance(sniffing, str):
+            sniffing_str = sniffing
+        else:
+            sniffing_str = json.dumps(sniffing) if sniffing else "{}"
+
+        update_data = {
+            "id": inbound_id,
+            "settings": settings_str,
+            "streamSettings": stream_settings_str,
+            "sniffing": sniffing_str,
+            "tag": inbound.get("tag", ""),
+            "protocol": inbound.get("protocol", "vless"),
+            "port": inbound.get("port", 443),
+            "listen": inbound.get("listen", ""),
+            "remark": inbound.get("remark", ""),
+            "enable": inbound.get("enable", True),
+            "expiryTime": inbound.get("expiryTime", 0),
+            "clientStats": inbound.get("clientStats", []),
+            "up": inbound.get("up", 0),
+            "down": inbound.get("down", 0),
+            "total": inbound.get("total", 0),
+        }
+
+        update_endpoints = [
+            f"/panel/api/inbounds/update/{inbound_id}",
+            f"/panel/api/inbound/update/{inbound_id}",
+        ]
+        for endpoint in update_endpoints:
+            result = await self._make_request("POST", endpoint, update_data)
+            if result and result.get("success"):
+                await self.restart_xray()
+                return True
+        return False
+
+    async def update_client_expiry(
+        self, uuid: str, expiry_time_ms: int, inbound_id: int = None
+    ) -> bool:
+        """Обновляет срок действия клиента в 3x-ui (expiryTime в миллисекундах Unix)."""
+        inbound_id = inbound_id or self.inbound_id
+        try:
+            inbound = await self.get_inbound(inbound_id)
+            if not inbound:
+                logger.error(f"Inbound {inbound_id} не найден в 3x-ui")
+                return False
+
+            inbound_settings = self._parse_inbound_settings(inbound)
+            clients = inbound_settings.get("clients", [])
+            updated = False
+            for client in clients:
+                if client.get("id") == uuid:
+                    client["expiryTime"] = expiry_time_ms
+                    client["enable"] = True
+                    updated = True
+                    break
+
+            if not updated:
+                logger.warning(f"Клиент {uuid} не найден в 3x-ui для обновления срока")
+                return False
+
+            inbound_settings["clients"] = clients
+            if await self._save_inbound_clients(inbound, inbound_settings, inbound_id):
+                logger.info(
+                    f"✅ Срок клиента {uuid} в 3x-ui обновлён до {expiry_time_ms}"
+                )
+                return True
+            logger.error(f"Не удалось сохранить срок клиента {uuid} в 3x-ui")
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка обновления срока клиента в 3x-ui: {e}")
+            return False
+
+    async def add_client(
+        self,
+        uuid: str,
+        email: str = None,
+        inbound_id: int = None,
+        expiry_time_ms: int = 0,
+    ) -> tuple[bool, Optional[Dict]]:
         """Добавление клиента в inbound
         
         Returns:
@@ -415,21 +514,14 @@ class X3UIService:
                 logger.error(f"Inbound {inbound_id} не найден в 3x-ui")
                 return False, None
             
-            # Получаем список клиентов
-            # settings может быть строкой JSON или словарем
-            inbound_settings = inbound.get("settings", {})
-            if isinstance(inbound_settings, str):
-                import json
-                inbound_settings = json.loads(inbound_settings)
-            elif not isinstance(inbound_settings, dict):
-                inbound_settings = {}
-            
+            inbound_settings = self._parse_inbound_settings(inbound)
             clients = inbound_settings.get("clients", [])
             
             # Проверяем, нет ли уже такого клиента
             if any(c.get("id") == uuid for c in clients):
                 logger.info(f"Пользователь {uuid} уже существует в 3x-ui")
-                # Возвращаем текущую конфигурацию
+                if expiry_time_ms:
+                    await self.update_client_expiry(uuid, expiry_time_ms, inbound_id)
                 config = await self.get_xray_config()
                 return True, config
             
@@ -438,7 +530,7 @@ class X3UIService:
                 "id": uuid,
                 "email": email,
                 "enable": True,
-                "expiryTime": 0,
+                "expiryTime": expiry_time_ms,
                 "limitIp": 0,
                 "totalGB": 0,
                 "flow": "",  # Для VLESS

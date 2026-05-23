@@ -207,6 +207,79 @@ class V2RayService:
             from app.services.vpn import VPSService
             self._vps_service = VPSService()
         return self._vps_service
+
+    async def _get_db_user_id(self, telegram_user_id: int) -> Optional[int]:
+        async with self.db.session_maker() as session:
+            from sqlalchemy import select
+            from app.database.models import User
+
+            stmt = select(User.id).where(User.telegram_id == telegram_user_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    async def _get_subscription_end_date(self, telegram_user_id: int):
+        """Дата окончания активной подписки."""
+        async with self.db.session_maker() as session:
+            from sqlalchemy import select, and_
+            from app.database.models import Subscription, User
+
+            stmt = (
+                select(Subscription.end_date)
+                .join(User)
+                .where(
+                    and_(
+                        User.telegram_id == telegram_user_id,
+                        Subscription.is_active == True,
+                    )
+                )
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    @staticmethod
+    def _datetime_to_expiry_ms(dt: datetime) -> int:
+        return int(dt.timestamp() * 1000)
+
+    async def sync_subscription_to_x3ui(self, telegram_user_id: int) -> bool:
+        """Синхронизирует срок подписки из БД бота с клиентом в 3x-ui."""
+        end_date = await self._get_subscription_end_date(telegram_user_id)
+        if not end_date:
+            logger.warning(f"Нет активной подписки для sync: user_id={telegram_user_id}")
+            return False
+
+        key_data = await self.get_active_key(telegram_user_id)
+        if not key_data or not key_data.get("uuid"):
+            logger.info(
+                f"Нет активного ключа для sync в 3x-ui: user_id={telegram_user_id}"
+            )
+            return False
+
+        expiry_ms = self._datetime_to_expiry_ms(end_date)
+        vps_service = await self._get_vps_service()
+        success = await vps_service.update_user_expiry(key_data["uuid"], expiry_ms)
+
+        if success:
+            db_user_id = await self._get_db_user_id(telegram_user_id)
+            async with self.db.session_maker() as session:
+                from sqlalchemy import select, or_, update
+                from app.database.models import V2RayKey
+
+                conditions = [V2RayKey.user_id == telegram_user_id]
+                if db_user_id:
+                    conditions.append(V2RayKey.user_id == db_user_id)
+
+                stmt = (
+                    update(V2RayKey)
+                    .where(V2RayKey.uuid == key_data["uuid"], V2RayKey.is_active == True)
+                    .values(expires_at=end_date)
+                )
+                await session.execute(stmt)
+                await session.commit()
+            logger.info(
+                f"✅ Срок подписки синхронизирован в 3x-ui: user_id={telegram_user_id}, "
+                f"до {end_date.strftime('%d.%m.%Y')}"
+            )
+        return success
     
     async def _get_inbound_cached(self, force_refresh: bool = False):
         """Получение inbound с кэшированием (кэш на 60 секунд)"""
@@ -367,16 +440,27 @@ class V2RayService:
         elif protocol_type == "vmess" and not key_string.startswith("vmess://"):
             logger.error(f"❌ ОШИБКА: Ожидался vmess://, но получен: {key_string[:30]}...")
         
-        expires_at = datetime.utcnow() + timedelta(days=30)
-        
+        subscription_end = await self._get_subscription_end_date(user_id)
+        expires_at = subscription_end or (datetime.utcnow() + timedelta(days=30))
+        expiry_time_ms = self._datetime_to_expiry_ms(expires_at)
+        db_user_id = await self._get_db_user_id(user_id)
+        storage_user_id = db_user_id or user_id
+
         async with self.db.session_maker() as session:
             from sqlalchemy import text
             from app.database.models import V2RayKey
-            
-            # Деактивируем старые ключи
+
+            deactivate_conditions = ["user_id = :telegram_id"]
+            params = {"telegram_id": user_id}
+            if db_user_id:
+                deactivate_conditions.append("user_id = :db_user_id")
+                params["db_user_id"] = db_user_id
+
             await session.execute(
-                text("UPDATE v2ray_keys SET is_active = false WHERE user_id = :user_id"),
-                {"user_id": user_id}
+                text(
+                    f"UPDATE v2ray_keys SET is_active = false WHERE {' OR '.join(deactivate_conditions)}"
+                ),
+                params,
             )
             
             # Определяем тип протокола
@@ -413,7 +497,7 @@ class V2RayService:
             
             # Создаем новый ключ
             v2ray_key = V2RayKey(
-                user_id=user_id,
+                user_id=storage_user_id,
                 key_type=protocol_type,  # vmess или vless
                 uuid=generated_uuid,  # Сохраняем UUID для управления на сервере
                 server_address=server_config["address"],
@@ -441,7 +525,13 @@ class V2RayService:
                 # Используем уникальный email на основе UUID, чтобы избежать дубликатов
                 unique_email = f"user_{generated_uuid[:8]}"
                 # Передаем тип протокола и порт для правильного поиска inbound
-                success, config = await vps_service.add_user_to_v2ray(generated_uuid, unique_email, protocol_type, server_config.get("port", 443))
+                success, config = await vps_service.add_user_to_v2ray(
+                    generated_uuid,
+                    unique_email,
+                    protocol_type,
+                    server_config.get("port", 443),
+                    expiry_time_ms=expiry_time_ms,
+                )
                 if success:
                     logger.info(f"✅ Пользователь {generated_uuid} автоматически добавлен на VPS")
                     if config:
@@ -471,15 +561,23 @@ class V2RayService:
             }
     
     async def get_active_key(self, user_id: int) -> Optional[Dict]:
-        """Получение активного ключа пользователя"""
+        """Получение активного ключа пользователя (user_id — telegram_id)."""
         async with self.db.session_maker() as session:
-            from sqlalchemy import select
-            from app.database.models import V2RayKey
-            
-            stmt = select(V2RayKey).where(
-                V2RayKey.user_id == user_id,
-                V2RayKey.is_active == True
-            ).limit(1)
+            from sqlalchemy import select, or_
+            from app.database.models import User, V2RayKey
+
+            db_user_id_stmt = select(User.id).where(User.telegram_id == user_id)
+            db_user_id = (await session.execute(db_user_id_stmt)).scalar_one_or_none()
+
+            conditions = [V2RayKey.user_id == user_id]
+            if db_user_id:
+                conditions.append(V2RayKey.user_id == db_user_id)
+
+            stmt = (
+                select(V2RayKey)
+                .where(V2RayKey.is_active == True, or_(*conditions))
+                .limit(1)
+            )
             
             result = await session.execute(stmt)
             key = result.scalar_one_or_none()

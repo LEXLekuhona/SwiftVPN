@@ -17,11 +17,24 @@ class Database:
             expire_on_commit=False
         )
     
+    async def _migrate_payments_table(self, conn) -> None:
+        """Добавляет колонки для ЮKassa в существующую таблицу payments (SQLite)."""
+        if "sqlite" not in settings.DATABASE_URL:
+            return
+        result = await conn.execute(text("PRAGMA table_info(payments)"))
+        columns = {row[1] for row in result.fetchall()}
+        if "yookassa_payment_id" not in columns:
+            await conn.execute(
+                text("ALTER TABLE payments ADD COLUMN yookassa_payment_id VARCHAR(36)")
+            )
+            logger.info("Добавлена колонка payments.yookassa_payment_id")
+
     async def init_db(self):
         """Инициализация базы данных"""
         try:
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                await self._migrate_payments_table(conn)
             
             # Добавляем тестовые тарифы
             async with self.session_maker() as session:

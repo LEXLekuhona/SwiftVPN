@@ -1,11 +1,22 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery, SuccessfulPayment
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    LabeledPrice,
+    PreCheckoutQuery,
+    SuccessfulPayment,
+    InlineKeyboardButton,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.services.payment import StarsService
+from app.services.payment.yookassa_service import YooKassaService, YooKassaError
+from app.services.payment.payment_fulfillment import (
+    create_pending_payment,
+    fulfill_tariff_payment,
+)
 from app.services.user import SubscriptionService
 from app.services.database import db
 from config.settings import settings
-import json
 from loguru import logger
 
 # Инициализация сервисов
@@ -50,12 +61,15 @@ async def show_tariffs(message_or_callback):
 
         kb.adjust(1)
 
+        payment_lines = ["• ⭐ Telegram Stars"]
+        if YooKassaService.is_configured():
+            payment_lines.append("• 🏦 СБП (ЮKassa)")
         tariffs_text = (
             "📋 *Выберите тарифный план:*\n\n"
             "После оплаты вы сразу получите ключ для V2RayTun!\n\n"
             "💳 *Можно оплатить:*\n"
-            "• ⭐ Telegram Stars - *Основной способ оплаты*\n"
-            "• СПБ - Скоро появится\n\n"
+            + "\n".join(payment_lines)
+            + "\n\n"
         )
 
         if isinstance(message_or_callback, CallbackQuery):
@@ -137,9 +151,14 @@ async def callback_select_tariff(callback: CallbackQuery):
 
         kb = InlineKeyboardBuilder()
         kb.button(
-            text="⭐ Telegram Stars - Основной способ оплаты",
-            callback_data=f"create_invoice:{tariff_id}:STARS"
+            text="⭐ Telegram Stars",
+            callback_data=f"create_invoice:{tariff_id}:STARS",
         )
+        if YooKassaService.is_configured():
+            kb.button(
+                text="🏦 СБП (ЮKassa)",
+                callback_data=f"create_invoice:{tariff_id}:SBP",
+            )
         kb.adjust(1)
 
         # Проверяем, есть ли в сообщении фото
@@ -181,7 +200,7 @@ async def callback_create_invoice(callback: CallbackQuery):
         # Формат: create_invoice:tariff_id:asset
         parts = callback.data.split(":")
         tariff_id = int(parts[1])
-        payment_method = parts[2]  # STARS
+        payment_method = parts[2]  # STARS | SBP
 
         async with db.session_maker() as session:
             from sqlalchemy import select
@@ -195,7 +214,71 @@ async def callback_create_invoice(callback: CallbackQuery):
             await callback.answer("Тариф не найден", show_alert=True)
             return
 
-        paid_bot_username = settings.BOT_USERNAME.lstrip("@") if settings.BOT_USERNAME else ""
+        if payment_method == "SBP":
+            if not YooKassaService.is_configured():
+                await callback.answer("СБП временно недоступен", show_alert=True)
+                return
+
+            metadata = {
+                "telegram_user_id": str(callback.from_user.id),
+                "tariff_id": str(tariff_id),
+            }
+            try:
+                payment = await YooKassaService.create_sbp_payment(
+                    amount_rub=tariff.price_rub,
+                    description=f"VPN: {tariff.name} ({tariff.duration_days} дн.)",
+                    metadata=metadata,
+                )
+            except YooKassaError as e:
+                logger.error(f"Ошибка создания платежа СБП: {e}")
+                if "invalid_credentials" in str(e) or "Authentication" in str(e):
+                    await callback.answer(
+                        "Ошибка авторизации ЮKassa. Проверьте shopId и секретный ключ в .env",
+                        show_alert=True,
+                    )
+                else:
+                    await callback.answer("Не удалось создать платёж. Попробуйте позже.", show_alert=True)
+                return
+
+            payment_id = payment["id"]
+            confirmation_url = YooKassaService.get_confirmation_url(payment)
+            if not confirmation_url:
+                await callback.answer("Не получена ссылка на оплату", show_alert=True)
+                return
+
+            try:
+                await create_pending_payment(
+                    telegram_user_id=callback.from_user.id,
+                    tariff_id=tariff_id,
+                    amount_rub=tariff.price_rub,
+                    yookassa_payment_id=payment_id,
+                )
+            except ValueError:
+                await callback.answer("Сначала нажмите /start", show_alert=True)
+                return
+
+            kb = InlineKeyboardBuilder()
+            kb.row(
+                InlineKeyboardButton(text="💳 Оплатить по СБП", url=confirmation_url),
+            )
+            kb.row(
+                InlineKeyboardButton(
+                    text="🔄 Проверить оплату",
+                    callback_data=f"check_sbp:{payment_id}",
+                ),
+            )
+
+            await callback.message.answer(
+                f"🏦 <b>Оплата через СБП</b>\n\n"
+                f"Тариф: {tariff.name}\n"
+                f"Сумма: {tariff.price_rub:.0f} ₽\n\n"
+                f"Нажмите «Оплатить по СБП», завершите оплату в приложении банка, "
+                f"затем вернитесь в бот и нажмите «Проверить оплату».\n\n"
+                f"<i>Ссылка действует 1 час.</i>",
+                reply_markup=kb.as_markup(),
+            )
+            await callback.answer("Ссылка на оплату отправлена")
+            return
 
         if payment_method == "STARS":
             # Оплата через Telegram Stars (СБП/карта)
@@ -224,6 +307,67 @@ async def callback_create_invoice(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Ошибка в callback_create_invoice: {e}")
         await callback.answer("Произошла ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("check_sbp:"))
+async def callback_check_sbp_payment(callback: CallbackQuery):
+    """Ручная проверка статуса платежа СБП."""
+    payment_id = callback.data.split(":", 1)[1]
+    await callback.answer("Проверяем оплату...")
+
+    try:
+        payment = await YooKassaService.get_payment(payment_id)
+    except YooKassaError as e:
+        logger.error(f"Ошибка проверки платежа {payment_id}: {e}")
+        await callback.message.answer("❌ Не удалось проверить статус оплаты. Попробуйте позже.")
+        return
+
+    status = payment.get("status")
+    metadata = payment.get("metadata") or {}
+
+    if status == "succeeded":
+        telegram_user_id = int(metadata.get("telegram_user_id", callback.from_user.id))
+        tariff_id_raw = metadata.get("tariff_id")
+        if not tariff_id_raw:
+            await callback.message.answer("❌ Ошибка данных платежа. Обратитесь в поддержку.")
+            return
+        tariff_id = int(tariff_id_raw)
+        amount = float((payment.get("amount") or {}).get("value", 0))
+
+        if telegram_user_id != callback.from_user.id:
+            await callback.message.answer("❌ Этот платёж принадлежит другому пользователю.")
+            return
+
+        success = await fulfill_tariff_payment(
+            telegram_user_id=telegram_user_id,
+            tariff_id=tariff_id,
+            amount_rub=amount,
+            payment_method="sbp",
+            external_id=payment_id,
+        )
+        if success:
+            await callback.message.answer(
+                "✅ <b>Оплата через СБП получена!</b>\n\n"
+                "🔑 Ваш ключ доступа отправляется...",
+            )
+            from app.handlers.user.v2ray import send_v2ray_key_to_user
+
+            await send_v2ray_key_to_user(telegram_user_id)
+        else:
+            await callback.message.answer(
+                "❌ Ошибка активации подписки. Обратитесь в поддержку.\n"
+                f"ID платежа: <code>{payment_id}</code>",
+            )
+        return
+
+    if status == "canceled":
+        await callback.message.answer("❌ Платёж отменён. Создайте новый счёт через /buy.")
+        return
+
+    await callback.message.answer(
+        "⏳ Оплата ещё не поступила.\n\n"
+        "Завершите оплату по СБП и нажмите «Проверить оплату» снова.",
+    )
 
 
 @router.pre_checkout_query()

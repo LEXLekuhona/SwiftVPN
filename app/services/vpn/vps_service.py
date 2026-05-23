@@ -92,7 +92,21 @@ class VPSService:
             logger.error(f"Ошибка определения пути к конфигурации Xray: {e}")
             return None
     
-    async def add_user_to_v2ray(self, uuid: str, email: str = None, protocol_type: str = "vless", port: int = 443) -> tuple[bool, Optional[Dict]]:
+    async def update_user_expiry(self, uuid: str, expiry_time_ms: int) -> bool:
+        """Обновление срока действия клиента в 3x-ui."""
+        if self.use_x3ui:
+            return await self.x3ui_service.update_client_expiry(uuid, expiry_time_ms)
+        logger.warning("Обновление срока через SSH не реализовано")
+        return False
+
+    async def add_user_to_v2ray(
+        self,
+        uuid: str,
+        email: str = None,
+        protocol_type: str = "vless",
+        port: int = 443,
+        expiry_time_ms: int = 0,
+    ) -> tuple[bool, Optional[Dict]]:
         """Добавление пользователя в конфигурацию V2Ray/Xray на VPS
         
         Returns:
@@ -103,7 +117,9 @@ class VPSService:
         
         # Используем 3x-ui API, если включено
         if self.use_x3ui:
-            success, config = await self.x3ui_service.add_client(uuid, email)
+            success, config = await self.x3ui_service.add_client(
+                uuid, email, expiry_time_ms=expiry_time_ms
+            )
             if success and config:
                 logger.info(f"✅ Пользователь {uuid} добавлен через API, получена конфигурация Xray")
                 logger.debug(f"Конфигурация содержит {len(config.get('inbounds', []))} inbounds")
